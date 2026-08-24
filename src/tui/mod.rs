@@ -102,6 +102,7 @@ async fn event_loop<B: ratatui::backend::Backend>(
                 app.refresh_transfers().await;
             }
             (KeyCode::Char('a'), _) => app.toggle_any_format(),
+            (KeyCode::Char('v'), _) => app.toggle_variants(),
             _ => {}
         }
     }

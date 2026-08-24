@@ -30,6 +30,7 @@ pub struct App {
     pub search_selected: usize,
     pub searching: bool,
     pub any_format: bool,
+    pub allow_variants: bool,
 
     pub transfers: Vec<Transfer>,
     pub transfer_selected: usize,
@@ -53,6 +54,7 @@ impl App {
             search_selected: 0,
             searching: false,
             any_format: false,
+            allow_variants: false,
             transfers: Vec::new(),
             transfer_selected: 0,
             browse_user: String::new(),
@@ -108,6 +110,15 @@ impl App {
         }
     }
 
+    pub fn toggle_variants(&mut self) {
+        self.allow_variants = !self.allow_variants;
+        self.status = if self.allow_variants {
+            "including remixes, covers and live cuts".into()
+        } else {
+            "originals only — remixes and covers filtered".into()
+        };
+    }
+
     pub fn toggle_any_format(&mut self) {
         self.any_format = !self.any_format;
         self.status = if self.any_format {
@@ -128,6 +139,7 @@ impl App {
             },
             min_bitrate: 0,
             check_duration: true,
+            reject_variants: !self.allow_variants,
         }
     }
 

@@ -35,6 +35,9 @@ pub struct Filter {
     pub extensions: Vec<String>,
     pub min_bitrate: i64,
     pub check_duration: bool,
+    /// Reject remixes, covers, karaoke and live cuts unless the query asked for
+    /// one. See [`VARIANT_TOKENS`].
+    pub reject_variants: bool,
 }
 
 impl Default for Filter {
@@ -45,6 +48,7 @@ impl Default for Filter {
             extensions: Vec::new(),
             min_bitrate: 0,
             check_duration: true,
+            reject_variants: true,
         }
     }
 }
@@ -63,6 +67,27 @@ pub fn tokenize(s: &str) -> Vec<String> {
 }
 
 const AUDIO: &[&str] = &["mp3", "flac", "m4a", "ogg", "oga", "opus", "wav", "wma"];
+
+/// Tokens that mean "this is not the recording you asked for".
+///
+/// Duration filtering catches short edits and long mixes, but it cannot catch a
+/// full-length remix or a faithful cover — those have entirely plausible
+/// runtimes. These are matched as whole tokens, never substrings, so `mix`
+/// rejects `(Ken@Work Mix)` without touching a band called Mixtapes.
+///
+/// A token here is only disqualifying when the query did *not* ask for it: search
+/// for "steely dan peg live" and live versions stay in the running.
+const VARIANT_TOKENS: &[&str] = &[
+    "remix", "rmx", "mix", "karaoke", "tribute", "cover", "instrumental",
+    "acapella", "acoustic", "reprise", "demo", "rehearsal", "megamix",
+];
+
+/// Variant tokens judged against the *whole path* rather than the filename.
+///
+/// A compilation folder named "A Tribute To Daryl Hall And John Oates" is the
+/// tell that every file inside it is a cover, even though the filenames
+/// themselves look exactly like the originals.
+const PATH_VARIANT_TOKENS: &[&str] = &["tribute", "karaoke", "covers"];
 
 impl Filter {
     fn accepts(&self, c: &Candidate) -> bool {
@@ -94,6 +119,29 @@ impl Filter {
             // Lossless files report no bitrate; don't punish them for it.
             if let Some(br) = c.file.bit_rate {
                 if br < self.min_bitrate {
+                    return false;
+                }
+            }
+        }
+
+        if self.reject_variants {
+            // Never reject on a token the caller explicitly searched for.
+            let asked: Vec<&String> = self.title_tokens.iter().collect();
+
+            let name_tokens = tokenize(c.name());
+            for v in VARIANT_TOKENS {
+                if name_tokens.iter().any(|t| t == v)
+                    && !asked.iter().any(|t| t.as_str() == *v)
+                {
+                    return false;
+                }
+            }
+
+            let path_tokens = tokenize(&c.file.filename);
+            for v in PATH_VARIANT_TOKENS {
+                if path_tokens.iter().any(|t| t == v)
+                    && !asked.iter().any(|t| t.as_str() == *v)
+                {
                     return false;
                 }
             }
@@ -240,6 +288,74 @@ mod tests {
             ..Default::default()
         };
         assert!(rank(&responses, &f).is_empty());
+    }
+
+    #[test]
+    fn rejects_a_remix_of_the_right_song() {
+        // Real miss: "THIS IS IT (STARTING FROM SCRATCH RMX)" outranked the
+        // original because a remix has a perfectly plausible runtime.
+        let responses = vec![
+            resp("remixer", true, 0, 9_000_000,
+                 vec![file("This Is It (Starting From Scratch RMX).mp3", Some(320), Some(240))]),
+            resp("original", true, 0, 100,
+                 vec![file("This Is It.mp3", Some(320), Some(238))]),
+        ];
+        let f = Filter {
+            title_tokens: tokenize("This Is It"),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        let ranked = rank(&responses, &f);
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].username, "original");
+    }
+
+    #[test]
+    fn rejects_a_cover_hiding_in_a_tribute_album() {
+        // Real miss: searching Hall & Oates matched "A Tribute To Daryl Hall
+        // And John Oates" and downloaded a Bird and the Bee cover. The filename
+        // alone is innocent; only the folder gives it away.
+        let mut f0 = file("Sara Smile.mp3", Some(320), Some(215));
+        f0.filename =
+            "@@peer\\Music\\Interpreting The Masters Volume 1 A Tribute To Daryl Hall And John Oates\\Sara Smile.mp3"
+                .to_string();
+        let responses = vec![resp("coverband", true, 0, 9_000_000, vec![f0])];
+        let f = Filter {
+            title_tokens: tokenize("Sara Smile"),
+            artist_tokens: tokenize("Hall Oates"),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert!(rank(&responses, &f).is_empty());
+    }
+
+    #[test]
+    fn keeps_a_variant_the_query_actually_asked_for() {
+        let responses = vec![resp(
+            "dj", true, 0, 100,
+            vec![file("Lowdown (Ken@Work Mix).mp3", Some(320), Some(300))],
+        )];
+        let f = Filter {
+            title_tokens: tokenize("Lowdown Mix"),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert_eq!(rank(&responses, &f).len(), 1, "asked for a mix, should get one");
+    }
+
+    #[test]
+    fn variant_tokens_match_whole_words_only() {
+        // "Mixtapes" must not trip the "mix" rule.
+        let responses = vec![resp(
+            "band", true, 0, 100,
+            vec![file("Mixtapes And Cigarettes.mp3", Some(320), Some(200))],
+        )];
+        let f = Filter {
+            title_tokens: tokenize("Mixtapes And Cigarettes"),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert_eq!(rank(&responses, &f).len(), 1);
     }
 
     #[test]

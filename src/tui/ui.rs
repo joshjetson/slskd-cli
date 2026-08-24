@@ -82,7 +82,11 @@ fn query_bar(f: &mut Frame, area: Rect, app: &App) {
         Mode::Normal => (app.query.clone(), Style::default().fg(Color::White)),
     };
 
-    let title = if app.any_format { " query (any format) " } else { " query (mp3) " };
+    let title = format!(
+        " query ({}{}) ",
+        if app.any_format { "any format" } else { "mp3" },
+        if app.allow_variants { ", +variants" } else { "" }
+    );
     f.render_widget(
         Paragraph::new(Span::styled(text, style)).block(
             Block::default()
@@ -288,7 +292,7 @@ fn browse_tab(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn status_bar(f: &mut Frame, area: Rect, app: &App) {
-    let keys = " q quit · / search · jk move · d queue · b browse · c clear · a format · r refresh";
+    let keys = " q quit · / search · jk move · d queue · b browse · c clear · a format · v variants";
     let line = Line::from(vec![
         Span::styled(
             fmt::truncate(&app.status, area.width.saturating_sub(2) as usize),

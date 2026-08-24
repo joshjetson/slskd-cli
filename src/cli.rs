@@ -69,6 +69,10 @@ pub struct SearchArgs {
     #[arg(long)]
     pub no_duration_check: bool,
 
+    /// Keep remixes, covers, karaoke and live cuts in the results.
+    #[arg(long)]
+    pub allow_variants: bool,
+
     /// How many results to show.
     #[arg(long, short = 'n', default_value_t = 15)]
     pub limit: usize,
@@ -149,6 +153,7 @@ impl SearchArgs {
             extensions,
             min_bitrate: self.min_bitrate,
             check_duration: !self.no_duration_check,
+            reject_variants: !self.allow_variants,
         }
     }
 }

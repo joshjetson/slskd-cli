@@ -101,6 +101,7 @@ Useful flags on `search` and `get`:
 | `--any-format` | Allow any audio format |
 | `--min-bitrate 256` | Floor on bitrate, ignored for lossless |
 | `--no-duration-check` | Keep results with implausible runtimes |
+| `--allow-variants` | Keep remixes, covers, karaoke and live cuts |
 | `--count N` | Queue the top N sources instead of one |
 
 ### TUI keys
@@ -114,6 +115,7 @@ Useful flags on `search` and `get`:
 | `b` | Browse the selected peer's shares |
 | `c` | Clear completed transfers |
 | `a` | Toggle mp3-only vs any format |
+| `v` | Toggle whether remixes and covers are allowed |
 | `r` | Refresh |
 | `q` | Quit |
 
@@ -128,11 +130,18 @@ peer you pick, not which words you typed. Candidates are filtered, then ordered 
 3. **Plausible duration.** The one that catches real mistakes — a search for a 3:26 album
    track cheerfully returns 90-second radio edits, 30-second samples, and hour-long DJ
    mixes that merely mention it. Bitrate will never catch those; runtime does.
-4. **Bitrate**, capped at 320. Higher figures usually mean a transcode, not a better file.
-5. **Upload speed**, last — it only decides how fast an already-good file arrives.
+4. **Not a remix, cover, or karaoke take.** Duration cannot catch these — a full-length
+   remix or a faithful cover has a perfectly ordinary runtime. Variant words are matched
+   as whole tokens, so `mix` rejects `(Ken@Work Mix)` without touching a band named
+   Mixtapes. The folder is checked too: a filename can look completely innocent while
+   sitting inside `A Tribute To Daryl Hall And John Oates`, and everything in there is a
+   cover. A variant word is only disqualifying if you didn't ask for it — search for
+   `peg live` and live takes stay in.
+5. **Bitrate**, capped at 320. Higher figures usually mean a transcode, not a better file.
+6. **Upload speed**, last — it only decides how fast an already-good file arrives.
 
-Locked files are dropped, never queued. Use `--no-duration-check` when you genuinely want
-a mix or a medley.
+Locked files are dropped, never queued. Use `--no-duration-check` for mixes and medleys,
+`--allow-variants` when you actually want the remix.
 
 ## Notes on slskd
 

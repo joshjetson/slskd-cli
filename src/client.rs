@@ -116,7 +116,7 @@ impl Client {
 
     pub async fn start_search(&self, text: &str) -> Result<String> {
         let id = uuid::Uuid::new_v4().to_string();
-        let _: serde_json::Value = self
+        let res: Result<serde_json::Value> = self
             .post(
                 "/searches",
                 &SearchRequest {
@@ -124,8 +124,38 @@ impl Client {
                     search_text: text.to_string(),
                 },
             )
-            .await?;
-        Ok(id)
+            .await;
+
+        match res {
+            Ok(_) => Ok(id),
+            // slskd answers 500 (and sometimes 409) when it is not logged in to
+            // the Soulseek server, which says nothing about the real problem.
+            // Ask what the connection is actually doing and say so.
+            Err(e) => Err(self.explain_search_failure(e).await),
+        }
+    }
+
+    /// Turn an opaque search failure into something actionable.
+    async fn explain_search_failure(&self, original: anyhow::Error) -> anyhow::Error {
+        let Ok(state) = self.server().await else {
+            return original;
+        };
+        if state.is_logged_in {
+            return original;
+        }
+        anyhow!(
+            "slskd is not logged in to the Soulseek server (state: {}).\n\n\
+             Searches cannot run until it reconnects. slskd retries on its own with\n\
+             exponential backoff, so this usually clears by itself.\n\n\
+             A common cause is too many searches too quickly — the Soulseek server\n\
+             closes the connection, and repeated logins while throttled extend it.\n\
+             Pace bulk searching at roughly one every 20-30 seconds.",
+            state.state
+        )
+    }
+
+    pub async fn server(&self) -> Result<Server> {
+        self.get("/server").await
     }
 
     pub async fn search_state(&self, id: &str) -> Result<Search> {

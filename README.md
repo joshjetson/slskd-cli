@@ -148,9 +148,11 @@ Locked files are dropped, never queued. Use `--no-duration-check` for mixes and 
 - Searches are asynchronous. `"Completed, TimedOut"` is the **normal** terminal state — a
   Soulseek search ends when its clock runs out, not when the network is exhausted.
 - Soulseek paths are Windows-style and backslash-separated regardless of platform.
-- Soulseek rate-limits searches. Firing off dozens in quick succession will get the server
-  connection closed on you, after which slskd reconnects with exponential backoff. Pace
-  bulk work accordingly.
+- Soulseek rate-limits searches. Firing off dozens in quick succession gets the server
+  connection closed on you; slskd then reconnects with exponential backoff, and further
+  login attempts while throttled prolong it. Pace bulk work at roughly one search every
+  20-30 seconds. When this happens slskd answers searches with a bare `500`, so the client
+  checks the connection and reports what is actually wrong.
 - slskd 0.22 has no `/hub/transfers` SignalR hub, so transfers are polled rather than
   pushed. At a two-second interval the difference isn't perceptible.
 

@@ -68,6 +68,11 @@ async fn status(api: &Client) -> Result<()> {
         "shares     {} files, {} directories (ready: {})",
         app.shares.files, app.shares.directories, app.shares.ready
     );
+    if !app.server.is_logged_in {
+        println!();
+        println!("slskd is not logged in, so searches will fail. It reconnects on its");
+        println!("own with exponential backoff; searching too fast is a common cause.");
+    }
     if app.shares.files == 0 {
         println!();
         println!("note: you are sharing nothing. Soulseek users routinely ban");

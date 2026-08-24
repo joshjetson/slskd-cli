@@ -2,10 +2,11 @@
 
 use crate::{
     client::Client,
-    models::{flatten, Application, BrowseDirectory, Candidate, Transfer},
+    models::{flatten as flatten_transfers, Application, BrowseDirectory, Candidate, Search, Transfer, TransferUser},
     rank::{self, Filter},
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -28,7 +29,6 @@ pub struct App {
     pub query: String,
     pub results: Vec<Candidate>,
     pub search_selected: usize,
-    pub searching: bool,
     pub any_format: bool,
     pub allow_variants: bool,
 
@@ -41,6 +41,14 @@ pub struct App {
 
     pub app_state: Option<Application>,
     pub status: String,
+
+    /// A search runs on its own task so the interface keeps drawing and keeps
+    /// answering keys while it waits. A Soulseek search takes about 35 seconds;
+    /// awaiting it inline froze the whole app for that long, which is
+    /// indistinguishable from a crash.
+    pub search_task: Option<JoinHandle<anyhow::Result<Search>>>,
+    pub search_started: Option<Instant>,
+    pub transfers_task: Option<JoinHandle<anyhow::Result<Vec<TransferUser>>>>,
 }
 
 impl App {
@@ -52,7 +60,6 @@ impl App {
             query: String::new(),
             results: Vec::new(),
             search_selected: 0,
-            searching: false,
             any_format: false,
             allow_variants: false,
             transfers: Vec::new(),
@@ -62,7 +69,19 @@ impl App {
             browse_selected: 0,
             app_state: None,
             status: "press / to search, 1-3 to switch tabs, q to quit".into(),
+            search_task: None,
+            search_started: None,
+            transfers_task: None,
         }
+    }
+
+    pub fn searching(&self) -> bool {
+        self.search_task.is_some()
+    }
+
+    /// How long the in-flight search has been running, for the progress hint.
+    pub fn search_elapsed(&self) -> Option<Duration> {
+        self.search_started.map(|t| t.elapsed())
     }
 
     pub fn next_tab(&mut self) {
@@ -151,41 +170,80 @@ impl App {
         }
     }
 
-    pub async fn refresh_transfers(&mut self) {
-        match self.api.downloads().await {
-            Ok(users) => {
-                self.transfers = flatten(&users);
-                if self.transfer_selected >= self.transfers.len() {
-                    self.transfer_selected = self.transfers.len().saturating_sub(1);
-                }
-            }
-            Err(e) => self.status = format!("transfers failed: {e}"),
+    /// Ask for fresh transfers in the background. Cheap to call on a timer:
+    /// if one request is still outstanding this does nothing, so a slow link
+    /// cannot pile up requests or stall the frame loop.
+    pub fn refresh_transfers(&mut self) {
+        if self.transfers_task.as_ref().is_some_and(|h| !h.is_finished()) {
+            return;
         }
+        let api = self.api.clone();
+        self.transfers_task = Some(tokio::spawn(async move { api.downloads().await }));
     }
 
-    pub async fn run_search(&mut self) {
+    /// Kick off a search without blocking the interface.
+    pub fn start_search(&mut self) {
         if self.query.trim().is_empty() {
             return;
         }
+        if let Some(h) = self.search_task.take() {
+            h.abort();
+        }
         self.tab = Tab::Search;
-        self.searching = true;
-        self.status = format!("searching {:?}…", self.query);
+        self.results.clear();
+        self.search_selected = 0;
+        self.search_started = Some(Instant::now());
+        self.status = format!("searching {:?} — Esc to cancel", self.query);
 
-        let res = self.api.search(&self.query, Duration::from_secs(60)).await;
-        self.searching = false;
+        let api = self.api.clone();
+        let query = self.query.clone();
+        self.search_task = Some(tokio::spawn(async move {
+            api.search(&query, Duration::from_secs(90)).await
+        }));
+    }
 
-        match res {
-            Ok(s) => {
-                self.results = rank::rank(&s.responses, &self.filter());
-                self.search_selected = 0;
-                self.status = format!(
-                    "{} matching files from {} responses ({} locked, filtered out)",
-                    self.results.len(),
-                    s.response_count,
-                    s.locked_file_count
-                );
+    pub fn cancel_search(&mut self) {
+        if let Some(h) = self.search_task.take() {
+            h.abort();
+            self.search_started = None;
+            self.status = "search cancelled".into();
+        }
+    }
+
+    /// Collect anything that finished since the last frame. Never blocks.
+    pub async fn poll_tasks(&mut self) {
+        if self.search_task.as_ref().is_some_and(|h| h.is_finished()) {
+            let handle = self.search_task.take().expect("checked above");
+            self.search_started = None;
+            match handle.await {
+                Ok(Ok(s)) => {
+                    self.results = rank::rank(&s.responses, &self.filter());
+                    self.search_selected = 0;
+                    self.status = format!(
+                        "{} matching files from {} responses ({} locked, filtered out)",
+                        self.results.len(),
+                        s.response_count,
+                        s.locked_file_count
+                    );
+                }
+                Ok(Err(e)) => self.status = format!("search failed: {e}"),
+                Err(e) if e.is_cancelled() => {}
+                Err(e) => self.status = format!("search task failed: {e}"),
             }
-            Err(e) => self.status = format!("search failed: {e}"),
+        }
+
+        if self.transfers_task.as_ref().is_some_and(|h| h.is_finished()) {
+            let handle = self.transfers_task.take().expect("checked above");
+            match handle.await {
+                Ok(Ok(users)) => {
+                    self.transfers = flatten_transfers(&users);
+                    if self.transfer_selected >= self.transfers.len() {
+                        self.transfer_selected = self.transfers.len().saturating_sub(1);
+                    }
+                }
+                Ok(Err(e)) => self.status = format!("transfers failed: {e}"),
+                Err(_) => {}
+            }
         }
     }
 
@@ -208,7 +266,7 @@ impl App {
         {
             Ok(()) => {
                 self.status = format!("queued {} from {}", c.name(), c.username);
-                self.refresh_transfers().await;
+                self.refresh_transfers();
             }
             Err(e) => self.status = format!("queue failed: {e}"),
         }
@@ -242,7 +300,7 @@ impl App {
         match self.api.clear_completed().await {
             Ok(()) => {
                 self.status = "cleared completed transfers".into();
-                self.refresh_transfers().await;
+                self.refresh_transfers();
             }
             Err(e) => self.status = format!("clear failed: {e}"),
         }

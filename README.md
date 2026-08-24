@@ -173,6 +173,7 @@ Useful flags on `search` and `get`:
 | `a` | Toggle mp3-only vs any format |
 | `v` | Toggle whether remixes and covers are allowed |
 | `r` | Refresh |
+| `Esc` | Cancel a running search |
 | `q` | Quit |
 
 ## How sources are ranked
@@ -229,6 +230,9 @@ Locked files are dropped, never queued. Use `--no-duration-check` for mixes and 
   checks the connection and reports what is actually wrong.
 - slskd 0.22 has no `/hub/transfers` SignalR hub, so transfers are polled rather than
   pushed. At a two-second interval the difference isn't perceptible.
+- Searches take roughly 35 seconds, so the TUI runs them on a background task: the
+  interface keeps drawing, keys keep working, `Esc` cancels, and a spinner shows elapsed
+  time. Nothing about a search blocks the frame loop.
 
 ## Development
 

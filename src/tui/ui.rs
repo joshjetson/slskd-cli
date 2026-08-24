@@ -82,32 +82,48 @@ fn query_bar(f: &mut Frame, area: Rect, app: &App) {
         Mode::Normal => (app.query.clone(), Style::default().fg(Color::White)),
     };
 
-    let title = format!(
-        " query ({}{}) ",
-        if app.any_format { "any format" } else { "mp3" },
-        if app.allow_variants { ", +variants" } else { "" }
-    );
+    let title = match app.search_elapsed() {
+        Some(e) => format!(" query — {} searching {}s ", spinner_frame(e), e.as_secs()),
+        None => format!(
+            " query ({}{}) ",
+            if app.any_format { "any format" } else { "mp3" },
+            if app.allow_variants { ", +variants" } else { "" }
+        ),
+    };
     f.render_widget(
         Paragraph::new(Span::styled(text, style)).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(if app.mode == Mode::Editing { ACCENT } else { DIM }))
+                .border_style(Style::default().fg(
+                    if app.mode == Mode::Editing || app.searching() { ACCENT } else { DIM },
+                ))
                 .title(title),
         ),
         area,
     );
 }
 
+/// Frames for the in-flight indicator. A Soulseek search takes roughly 35
+/// seconds; without visible motion the app reads as hung.
+const SPINNER: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+
+fn spinner_frame(elapsed: std::time::Duration) -> &'static str {
+    SPINNER[(elapsed.as_millis() / 120) as usize % SPINNER.len()]
+}
+
 fn search_tab(f: &mut Frame, area: Rect, app: &mut App) {
     if app.results.is_empty() {
-        let msg = if app.searching {
-            "searching…"
-        } else {
-            "no results yet — press / and type a query, then Enter"
+        let msg = match app.search_elapsed() {
+            Some(e) => format!(
+                "{} searching… {}s elapsed\n\n   Soulseek searches take about 35 seconds.\n                    The interface stays live — Esc cancels, q quits.",
+                spinner_frame(e),
+                e.as_secs()
+            ),
+            None => "no results yet — press / and type a query, then Enter".to_string(),
         };
         f.render_widget(
             Paragraph::new(msg)
-                .style(Style::default().fg(DIM))
+                .style(Style::default().fg(if app.searching() { ACCENT } else { DIM }))
                 .block(Block::default().borders(Borders::ALL).title(" results ")),
             area,
         );
@@ -292,7 +308,7 @@ fn browse_tab(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn status_bar(f: &mut Frame, area: Rect, app: &App) {
-    let keys = " q quit · / search · jk move · d queue · b browse · c clear · a format · v variants";
+    let keys = " q quit · / search · esc cancel · jk move · d queue · b browse · a format · v variants";
     let line = Line::from(vec![
         Span::styled(
             fmt::truncate(&app.status, area.width.saturating_sub(2) as usize),
@@ -311,18 +327,23 @@ fn status_bar(f: &mut Frame, area: Rect, app: &App) {
 }
 
 #[cfg(test)]
+pub(crate) mod tests_support {
+    pub use super::tests::*;
+}
+
+#[cfg(test)]
 mod tests {
-    use super::*;
+    pub use super::*;
     use crate::client::Client;
     use crate::models::{BrowseDirectory, Candidate, File, Transfer};
     use crate::tui::app::App;
     use ratatui::{backend::TestBackend, Terminal};
 
-    fn app() -> App {
+    pub fn app() -> App {
         App::new(Client::new(reqwest::Client::new(), "http://localhost:5030", "k"))
     }
 
-    fn render(app: &mut App, w: u16, h: u16) -> String {
+    pub fn render(app: &mut App, w: u16, h: u16) -> String {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
         t.draw(|f| draw(f, app)).unwrap();
         let buf = t.backend().buffer().clone();
@@ -336,7 +357,7 @@ mod tests {
             .join("\n")
     }
 
-    fn candidate(name: &str, user: &str) -> Candidate {
+    pub fn candidate(name: &str, user: &str) -> Candidate {
         Candidate {
             username: user.into(),
             has_free_slot: true,
@@ -350,6 +371,20 @@ mod tests {
                 is_locked: false,
             },
         }
+    }
+
+    pub fn populated() -> App {
+        let mut a = app();
+        a.results = vec![candidate("01 Africa.mp3", "peer_one")];
+        a.transfers = vec![Transfer {
+            id: "1".into(), username: "peer_two".into(),
+            filename: "@@peer\\Music\\Aja\\Peg.mp3".into(),
+            state: "InProgress".into(), size: 8_000_000, bytes_transferred: 4_000_000,
+            percent_complete: 50.0, average_speed: 1_048_576.0, exception: None,
+        }];
+        a.browse_user = "peer_three".into();
+        a.browse_dirs = vec![BrowseDirectory { name: "Classic Rock".into(), file_count: 57, files: vec![] }];
+        a
     }
 
     #[test]
@@ -415,6 +450,22 @@ mod tests {
         }
         for h in [4u16, 5, 6] {
             let _ = render(&mut a, 80, h);
+        }
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::tests_support::*;
+
+    #[test]
+    fn every_tab_survives_a_tiny_terminal() {
+        for tab in [Tab::Search, Tab::Transfers, Tab::Browse] {
+            let mut a = populated();
+            a.tab = tab;
+            for (w, h) in [(1u16, 1u16), (2, 3), (10, 4), (40, 5), (200, 60)] {
+                let _ = render(&mut a, w, h);
+            }
         }
     }
 }

@@ -19,7 +19,27 @@ use std::{io, time::Duration};
 
 pub use app::{App, Mode, Tab};
 
+fn restore_terminal() {
+    let _ = disable_raw_mode();
+    let _ = execute!(io::stdout(), LeaveAlternateScreen);
+}
+
+/// Put the terminal back before a panic reaches the default handler.
+///
+/// Without this, any panic leaves the shell in raw mode on the alternate
+/// screen: no echo, no line editing, and the backtrace invisible. That is
+/// indistinguishable from the program "crashing the terminal", and the only way
+/// out is to blind-type `reset`.
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        default(info);
+    }));
+}
+
 pub async fn run(api: Client) -> Result<()> {
+    install_panic_hook();
     enable_raw_mode()?;
     let mut out = io::stdout();
     execute!(out, EnterAlternateScreen)?;
@@ -27,9 +47,8 @@ pub async fn run(api: Client) -> Result<()> {
 
     let res = event_loop(&mut term, api).await;
 
-    disable_raw_mode()?;
-    execute!(term.backend_mut(), LeaveAlternateScreen)?;
-    term.show_cursor()?;
+    restore_terminal();
+    let _ = term.show_cursor();
     res
 }
 
@@ -39,20 +58,24 @@ async fn event_loop<B: ratatui::backend::Backend>(
 ) -> Result<()> {
     let mut app = App::new(api);
     app.refresh_status().await;
-    app.refresh_transfers().await;
+    app.refresh_transfers();
 
     let mut last_poll = std::time::Instant::now();
 
     loop {
+        // Pick up anything that finished in the background, then draw. Neither
+        // of these blocks, so the interface stays live while a search runs.
+        app.poll_tasks().await;
         term.draw(|f| ui::draw(f, &mut app))?;
 
-        // Poll transfers on a timer, but stay responsive to keys in between.
         if last_poll.elapsed() >= Duration::from_secs(2) {
-            app.refresh_transfers().await;
+            app.refresh_transfers();
             last_poll = std::time::Instant::now();
         }
 
-        if !event::poll(Duration::from_millis(120))? {
+        // A short tick keeps the spinner moving while a search is in flight.
+        let tick = if app.searching() { 100 } else { 250 };
+        if !event::poll(Duration::from_millis(tick))? {
             continue;
         }
         let Event::Key(k) = event::read()? else {
@@ -68,7 +91,7 @@ async fn event_loop<B: ratatui::backend::Backend>(
                 KeyCode::Esc => app.mode = Mode::Normal,
                 KeyCode::Enter => {
                     app.mode = Mode::Normal;
-                    app.run_search().await;
+                    app.start_search();
                 }
                 KeyCode::Backspace => {
                     app.query.pop();
@@ -81,6 +104,7 @@ async fn event_loop<B: ratatui::backend::Backend>(
 
         match (k.code, k.modifiers) {
             (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(()),
+            (KeyCode::Esc, _) => app.cancel_search(),
             (KeyCode::Char('1'), _) => app.tab = Tab::Search,
             (KeyCode::Char('2'), _) => app.tab = Tab::Transfers,
             (KeyCode::Char('3'), _) => app.tab = Tab::Browse,
@@ -99,7 +123,7 @@ async fn event_loop<B: ratatui::backend::Backend>(
             (KeyCode::Char('c'), _) => app.clear_completed().await,
             (KeyCode::Char('r'), _) => {
                 app.refresh_status().await;
-                app.refresh_transfers().await;
+                app.refresh_transfers();
             }
             (KeyCode::Char('a'), _) => app.toggle_any_format(),
             (KeyCode::Char('v'), _) => app.toggle_variants(),

@@ -14,6 +14,27 @@ picked:
 queued  461. Robbie Dupree - Steal Away.mp3  from recovery8655
 ```
 
+The TUI:
+
+```
+ slsk   1 search  2 transfers  3 browse   sunjet · online · 57 shared
+┌ query (mp3) ─────────────────────────────────────────────────────────────────────────────────────────┐
+│toto                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ results (3) — d to queue, b to browse peer ──────────────────────────────────────────────────────────┐
+│user             slot queue speed   rate   len    size     file                     folder            │
+│poly_blooper     yes  0     7812KB/ 320k   4:55   7.6MB    01 - Toto - Africa.mp3   Toto IV           │
+│recovery8655     yes  0     7812KB/ 320k   4:55   7.6MB    04 - Toto - Rosanna.mp3  Toto IV           │
+│xanshark         yes  0     7812KB/ 320k   4:55   7.6MB    Toto - Georgy Porgy.mp3  Toto IV           │
+│                                                                                                      │
+│                                                                                                      │
+│                                                                                                      │
+│                                                                                                      │
+│                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────┘
+42 matching files from 187 responses (311 locked, filtere q quit · / search · jk move · d queue · b brow
+```
+
 ## Why
 
 The slskd web UI is good, but reaching for a browser to grab one track is friction, and

@@ -133,7 +133,7 @@ fn search_tab(f: &mut Frame, area: Rect, app: &mut App) {
                 Cell::from(fmt::duration(c.file.length)),
                 Cell::from(fmt::bytes(c.file.size)),
                 Cell::from(fmt::truncate(c.name(), 44)),
-                Cell::from(fmt::truncate(c.album(), 28)).style(Style::default().fg(DIM)),
+                Cell::from(fmt::truncate(c.album(), 18)).style(Style::default().fg(DIM)),
             ])
         })
         .collect();
@@ -151,8 +151,8 @@ fn search_tab(f: &mut Frame, area: Rect, app: &mut App) {
             Constraint::Length(6),
             Constraint::Length(6),
             Constraint::Length(8),
-            Constraint::Min(20),
-            Constraint::Length(28),
+            Constraint::Min(24),
+            Constraint::Length(18),
         ],
     )
     .header(
@@ -308,4 +308,113 @@ fn status_bar(f: &mut Frame, area: Rect, app: &App) {
         Paragraph::new(Span::styled(keys, Style::default().fg(DIM))),
         chunks[1],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::Client;
+    use crate::models::{BrowseDirectory, Candidate, File, Transfer};
+    use crate::tui::app::App;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn app() -> App {
+        App::new(Client::new(reqwest::Client::new(), "http://localhost:5030", "k"))
+    }
+
+    fn render(app: &mut App, w: u16, h: u16) -> String {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| draw(f, app)).unwrap();
+        let buf = t.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn candidate(name: &str, user: &str) -> Candidate {
+        Candidate {
+            username: user.into(),
+            has_free_slot: true,
+            queue_length: 0,
+            upload_speed: 8_000_000,
+            file: File {
+                filename: format!("@@peer\\Music\\Toto IV\\{name}"),
+                size: 8_000_000,
+                bit_rate: Some(320),
+                length: Some(295),
+                is_locked: false,
+            },
+        }
+    }
+
+    #[test]
+    fn renders_empty_state_without_panicking() {
+        let mut a = app();
+        let out = render(&mut a, 100, 24);
+        assert!(out.contains("slsk"));
+        assert!(out.contains("no results yet"));
+    }
+
+    #[test]
+    fn renders_search_results() {
+        let mut a = app();
+        a.results = vec![candidate("01 Africa.mp3", "peer_one")];
+        let out = render(&mut a, 120, 24);
+        assert!(out.contains("peer_one"), "user column missing:\n{out}");
+        assert!(out.contains("Africa"), "filename missing:\n{out}");
+        assert!(out.contains("Toto IV"), "folder column missing:\n{out}");
+    }
+
+    #[test]
+    fn renders_transfers_with_a_progress_gauge() {
+        let mut a = app();
+        a.tab = Tab::Transfers;
+        a.transfers = vec![Transfer {
+            id: "1".into(),
+            username: "peer_two".into(),
+            filename: "@@peer\\Music\\Aja\\Peg.mp3".into(),
+            state: "InProgress".into(),
+            size: 8_000_000,
+            bytes_transferred: 4_000_000,
+            percent_complete: 50.0,
+            average_speed: 1_048_576.0,
+            exception: None,
+        }];
+        let out = render(&mut a, 100, 24);
+        assert!(out.contains("peer_two"));
+        assert!(out.contains("downloading"));
+    }
+
+    #[test]
+    fn renders_browse_listing() {
+        let mut a = app();
+        a.tab = Tab::Browse;
+        a.browse_user = "peer_three".into();
+        a.browse_dirs = vec![BrowseDirectory {
+            name: "Classic Rock".into(),
+            file_count: 57,
+            files: vec![],
+        }];
+        let out = render(&mut a, 100, 24);
+        assert!(out.contains("peer_three"));
+        assert!(out.contains("Classic Rock"));
+    }
+
+    #[test]
+    fn survives_an_absurdly_narrow_terminal() {
+        // Layout maths that assumes width is a soft constraint panics here.
+        let mut a = app();
+        a.results = vec![candidate("01 Africa.mp3", "peer_one")];
+        for w in [1u16, 5, 12, 30] {
+            let _ = render(&mut a, w, 10);
+        }
+        for h in [4u16, 5, 6] {
+            let _ = render(&mut a, 80, h);
+        }
+    }
 }

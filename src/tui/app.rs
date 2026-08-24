@@ -170,7 +170,7 @@ impl App {
         self.searching = true;
         self.status = format!("searching {:?}…", self.query);
 
-        let res = self.api.search(&self.query, Duration::from_secs(25)).await;
+        let res = self.api.search(&self.query, Duration::from_secs(60)).await;
         self.searching = false;
 
         match res {

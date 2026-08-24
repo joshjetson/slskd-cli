@@ -77,8 +77,9 @@ pub struct SearchArgs {
     #[arg(long, short = 'n', default_value_t = 15)]
     pub limit: usize,
 
-    /// Seconds to let the search run.
-    #[arg(long, default_value_t = 30)]
+    /// Seconds to let the search run. Soulseek searches typically take ~35s,
+    /// and results are unavailable until the search finishes, so allow slack.
+    #[arg(long, default_value_t = 60)]
     pub wait: u64,
 }
 

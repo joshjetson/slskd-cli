@@ -168,6 +168,12 @@ Locked files are dropped, never queued. Use `--no-duration-check` for mixes and 
 
 - Searches are asynchronous. `"Completed, TimedOut"` is the **normal** terminal state — a
   Soulseek search ends when its clock runs out, not when the network is exhausted.
+- **Results only exist once a search finishes.** While a search is `InProgress`, slskd
+  increments `responseCount` live but leaves the `responses` array empty, filling it in
+  only at the terminal state. Reading early gives you a search that claims 150 responses
+  and carries none, which looks exactly like a search that matched nothing. Typical
+  completion is ~35s, so `--wait` defaults to 60 and the client refuses to report results
+  from a search that hasn't finished rather than reporting a false empty.
 - Soulseek paths are Windows-style and backslash-separated regardless of platform.
 - Soulseek rate-limits searches. Firing off dozens in quick succession gets the server
   connection closed on you; slskd then reconnects with exponential backoff, and further

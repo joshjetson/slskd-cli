@@ -182,16 +182,41 @@ impl Client {
     /// `"Completed, TimedOut"` is a terminal state and usually the one you get —
     /// a Soulseek search ends when its clock runs out, not when the network is
     /// exhausted. Waiting for anything tidier means waiting forever.
+    ///
+    /// It is essential to wait for that terminal state before reading results.
+    /// slskd increments `responseCount` live but leaves the `responses` array
+    /// **empty** for the entire time a search is `InProgress`, and only
+    /// materialises it on completion. Fetching early therefore yields a search
+    /// that claims 150 responses and carries none — indistinguishable, to a
+    /// caller that does not know this, from a search that genuinely matched
+    /// nothing. Typical completion is around 35 seconds, so an impatient
+    /// timeout silently turns almost every search into "no results".
     pub async fn search(&self, text: &str, max_wait: Duration) -> Result<Search> {
         let id = self.start_search(text).await?;
         let deadline = std::time::Instant::now() + max_wait;
-        loop {
+
+        let finished = loop {
             tokio::time::sleep(Duration::from_millis(1500)).await;
             let s = self.search_state(&id).await?;
-            if !s.in_progress() || std::time::Instant::now() >= deadline {
-                break;
+            if !s.in_progress() {
+                break true;
             }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+        };
+
+        if !finished {
+            let _ = self.delete_search(&id).await;
+            return Err(anyhow!(
+                "search did not finish within {}s.\n\n\
+                 slskd only fills in results once a search reaches a terminal state,\n\
+                 so there is nothing to read yet. Soulseek searches usually take about\n\
+                 35 seconds. Retry with a longer --wait.",
+                max_wait.as_secs()
+            ));
         }
+
         let full = self.search_results(&id).await?;
         let _ = self.delete_search(&id).await;
         Ok(full)

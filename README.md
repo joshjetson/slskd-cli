@@ -107,6 +107,7 @@ slsk                                  # interactive TUI
 slsk status                           # connection, shares, version
 slsk search "steely dan peg"          # ranked results, nothing queued
 slsk get "toto africa"                # search, pick the best source, confirm, queue
+slsk search "this is it" --artist "kenny loggins"   # separate the two, see below
 slsk get "toto rosanna" --yes         # skip the prompt
 slsk transfers --watch                # follow progress to completion
 slsk transfers --clear                # drop completed and errored records
@@ -158,8 +159,20 @@ peer you pick, not which words you typed. Candidates are filtered, then ordered 
    sitting inside `A Tribute To Daryl Hall And John Oates`, and everything in there is a
    cover. A variant word is only disqualifying if you didn't ask for it — search for
    `peg live` and live takes stay in.
-5. **Bitrate**, capped at 320. Higher figures usually mean a transcode, not a better file.
-6. **Upload speed**, last — it only decides how fast an already-good file arrives.
+5. **The title, matched where the title actually is.** Peers name files
+   `Artist - Album - NN - Title.ext`, which puts the album name in the same string the
+   title is tested against — searching the Doobie Brothers' *Minute By Minute* happily
+   returns `... - Minute by Minute - 01 - Here to Love You.mp3`, right album, wrong song.
+   Only the final segment is matched. And a title made of short words survives
+   tokenising as almost nothing — *This Is It* reduces to `this`, which matches *This Is
+   How My Song Goes* — so weak titles must additionally appear as a contiguous phrase.
+6. **Bitrate**, capped at 320. Higher figures usually mean a transcode, not a better file.
+7. **Upload speed**, last — it only decides how fast an already-good file arrives.
+
+Prefer `--artist` over folding the artist into the query. `slsk search "kenny loggins this
+is it"` treats every word as part of the title, which makes a weak title look strong and
+lets `with_this_ring.mp3` through. `slsk search "this is it" --artist "kenny loggins"`
+narrowed the same 4062 files to the 2 correct ones.
 
 Locked files are dropped, never queued. Use `--no-duration-check` for mixes and medleys,
 `--allow-variants` when you actually want the remix.

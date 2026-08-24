@@ -26,8 +26,11 @@ pub const MAX_LEN: i64 = 600;
 
 #[derive(Debug, Clone)]
 pub struct Filter {
-    /// Lowercased tokens that must all appear in the file's basename.
+    /// Lowercased tokens that must all appear in the file's title field.
     pub title_tokens: Vec<String>,
+    /// The full normalised title. Enforced as a contiguous phrase when
+    /// `title_tokens` is too weak to identify a song on its own.
+    pub title_phrase: Option<String>,
     /// Lowercased tokens, at least one of which must appear in the full path.
     /// Empty means no artist constraint.
     pub artist_tokens: Vec<String>,
@@ -44,6 +47,7 @@ impl Default for Filter {
     fn default() -> Self {
         Self {
             title_tokens: Vec::new(),
+            title_phrase: None,
             artist_tokens: Vec::new(),
             extensions: Vec::new(),
             min_bitrate: 0,
@@ -66,7 +70,51 @@ pub fn tokenize(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// The title portion of a filename.
+///
+/// Peers commonly name files `Artist - Album - NN - Title.ext`, which means the
+/// album name is sitting right there in the string the title is matched
+/// against. Searching for the Doobie Brothers' "Minute By Minute" matched
+/// `The Doobie Brothers - Minute by Minute - 01 - Here to Love You.mp3` — the
+/// right album, the wrong song. Matching only against the final segment fixes
+/// that, and degrades to the whole name when there are no separators.
+///
+/// Underscores are normalised first; `01_-_Artist_-_Title.mp3` is common.
+fn title_field(basename: &str) -> String {
+    let norm = basename.replace('_', " ");
+    let stem = norm.rsplit_once('.').map(|(s, _)| s).unwrap_or(&norm).to_string();
+    match stem.rsplit(" - ").next() {
+        Some(last) if !last.trim().is_empty() => last.trim().to_lowercase(),
+        _ => stem.to_lowercase(),
+    }
+}
+
+/// Titles made almost entirely of short words survive tokenisation as one or
+/// two weak tokens — "This Is It" becomes just `this`, which matches "This Is
+/// How My Song Goes". When a title is that weak, require the whole phrase.
+fn is_weak(title_tokens: &[String]) -> bool {
+    title_tokens.len() < 2 || title_tokens.iter().map(|t| t.len()).sum::<usize>() < 8
+}
+
+pub fn normalize_phrase(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut space = false;
+    for c in s.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            if space && !out.is_empty() {
+                out.push(' ');
+            }
+            space = false;
+            out.push(c);
+        } else {
+            space = true;
+        }
+    }
+    out
+}
+
 const AUDIO: &[&str] = &["mp3", "flac", "m4a", "ogg", "oga", "opus", "wav", "wma"];
+
 
 /// Tokens that mean "this is not the recording you asked for".
 ///
@@ -103,9 +151,16 @@ impl Filter {
             return false;
         }
 
-        let base = c.name().to_lowercase();
-        if !self.title_tokens.iter().all(|t| base.contains(t.as_str())) {
+        // Match the title against the title field, not the whole filename, so
+        // an album name embedded in the path cannot stand in for the song.
+        let field = title_field(c.name());
+        if !self.title_tokens.iter().all(|t| field.contains(t.as_str())) {
             return false;
+        }
+        if let Some(phrase) = &self.title_phrase {
+            if is_weak(&self.title_tokens) && !normalize_phrase(&field).contains(phrase.as_str()) {
+                return false;
+            }
         }
 
         if !self.artist_tokens.is_empty() {
@@ -356,6 +411,69 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(rank(&responses, &f).len(), 1);
+    }
+
+    #[test]
+    fn album_name_in_the_filename_cannot_stand_in_for_the_title() {
+        // Real miss: searching the Doobie Brothers' "Minute By Minute" matched
+        // a file from that album whose actual song is something else. The album
+        // name sits in the filename, so a naive substring test passes.
+        let mut f0 = file("x.mp3", Some(320), Some(280));
+        f0.filename =
+            "@@peer\\Music\\Minute by Minute\\The Doobie Brothers - Minute by Minute - 01 - Here to Love You.mp3"
+                .to_string();
+        let f = Filter {
+            title_tokens: tokenize("Minute By Minute"),
+            title_phrase: Some(normalize_phrase("Minute By Minute")),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert!(rank(&[resp("peer", true, 0, 100, vec![f0])], &f).is_empty());
+    }
+
+    #[test]
+    fn a_title_of_short_words_must_match_as_a_phrase() {
+        // Real miss: "This Is It" tokenises to just ["this"], which matched
+        // "This Is How My Song Goes" from the same artist.
+        let mut wrong = file("x.mp3", Some(320), Some(240));
+        wrong.filename =
+            "@@peer\\Music\\It's About Time\\Kenny Loggins - It's About Time - 07 - This Is How My Song Goes.mp3"
+                .to_string();
+        let mut right = file("y.mp3", Some(320), Some(238));
+        right.filename = "@@peer\\Music\\Keep the Fire\\Kenny Loggins - This Is It.mp3".to_string();
+
+        let f = Filter {
+            title_tokens: tokenize("This Is It"),
+            title_phrase: Some(normalize_phrase("This Is It")),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        let ranked = rank(&[resp("peer", true, 0, 100, vec![wrong, right])], &f);
+        assert_eq!(ranked.len(), 1, "only the real track should survive");
+        assert!(ranked[0].file.filename.ends_with("This Is It.mp3"));
+    }
+
+    #[test]
+    fn title_field_handles_the_common_naming_shapes() {
+        assert_eq!(title_field("01 Steal Away.mp3"), "01 steal away");
+        assert_eq!(title_field("Artist - Title.mp3"), "title");
+        assert_eq!(title_field("A - B - 07 - Real Title.mp3"), "real title");
+        // underscore-separated names are common from some clients
+        assert_eq!(title_field("02_-_Hall_&_Oates_-_Rich_Girl.mp3"), "rich girl");
+    }
+
+    #[test]
+    fn a_strong_title_still_matches_without_the_phrase_being_contiguous() {
+        // "Laughter In The Rain" is strong enough to match on tokens alone,
+        // which matters because peers reorder and punctuate freely.
+        let f = Filter {
+            title_tokens: tokenize("Laughter In The Rain"),
+            title_phrase: Some(normalize_phrase("Laughter In The Rain")),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        let g = file("086. Neil Sedaka - Laughter In The Rain.mp3", Some(320), Some(170));
+        assert_eq!(rank(&[resp("peer", true, 0, 100, vec![g])], &f).len(), 1);
     }
 
     #[test]

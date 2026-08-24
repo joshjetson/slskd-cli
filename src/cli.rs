@@ -146,6 +146,7 @@ impl SearchArgs {
 
         crate::rank::Filter {
             title_tokens: crate::rank::tokenize(&self.query_string()),
+            title_phrase: Some(crate::rank::normalize_phrase(&self.query_string())),
             artist_tokens: self
                 .artist
                 .as_deref()

@@ -131,6 +131,7 @@ impl App {
     fn filter(&self) -> Filter {
         Filter {
             title_tokens: rank::tokenize(&self.query),
+            title_phrase: Some(rank::normalize_phrase(&self.query)),
             artist_tokens: Vec::new(),
             extensions: if self.any_format {
                 Vec::new()

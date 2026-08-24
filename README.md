@@ -43,13 +43,15 @@ picking for you and stays in the terminal.
 
 ## Install
 
-Requires Rust 1.82 or newer.
-
 ```sh
 git clone https://github.com/joshjetson/slskd-cli
 cd slskd-cli
-cargo install --path .
+cargo install --path . --locked
 ```
+
+`--locked` matters. Without it Cargo ignores `Cargo.lock` and re-resolves to the newest
+compatible dependencies, several of which now require a newer rustc than the pinned set
+does — so a toolchain that builds this repo fine will fail to `cargo install` it.
 
 ## Setup
 

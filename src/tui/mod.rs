@@ -120,7 +120,16 @@ async fn event_loop<B: ratatui::backend::Backend>(
             (KeyCode::Enter, _) => app.activate().await,
             (KeyCode::Char('d'), _) => app.enqueue_selected().await,
             (KeyCode::Char('b'), _) => app.browse_selected().await,
-            (KeyCode::Char('c'), _) => app.clear_completed().await,
+            // `c` clears whatever list you are looking at.
+            (KeyCode::Char('c'), _) => match app.tab {
+                Tab::Browse => app.clear_browse(),
+                _ => app.clear_completed().await,
+            },
+            (KeyCode::Char('x'), _) => {
+                if app.tab == Tab::Transfers {
+                    app.remove_selected_transfer().await;
+                }
+            }
             (KeyCode::Char('r'), _) => {
                 app.refresh_status().await;
                 app.refresh_transfers();

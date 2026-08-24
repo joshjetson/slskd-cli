@@ -257,6 +257,25 @@ impl Client {
         Ok(())
     }
 
+    /// Remove one transfer record. Cancels it first if still running.
+    pub async fn remove_download(&self, username: &str, id: &str) -> Result<()> {
+        let url = self.url(&format!(
+            "/transfers/downloads/{}/{}",
+            encode_segment(username),
+            encode_segment(id)
+        ));
+        let res = self
+            .http
+            .delete(&url)
+            .header("X-API-Key", &self.key)
+            .send()
+            .await?;
+        if !res.status().is_success() {
+            return Err(anyhow!("{} removing transfer", res.status()));
+        }
+        Ok(())
+    }
+
     pub async fn browse(&self, username: &str) -> Result<BrowseResult> {
         self.get(&format!("/users/{}/browse", encode_segment(username)))
             .await

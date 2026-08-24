@@ -187,6 +187,10 @@ pub struct Transfer {
     pub percent_complete: f64,
     pub average_speed: f64,
     pub exception: Option<String>,
+    /// When the download was asked for. Used to show newest first; slskd
+    /// returns transfers grouped by peer, which is close to arbitrary order.
+    pub requested_at: Option<String>,
+    pub enqueued_at: Option<String>,
 }
 
 impl Transfer {
@@ -202,16 +206,31 @@ impl Transfer {
     pub fn errored(&self) -> bool {
         self.state.starts_with("Completed") && !self.succeeded()
     }
+    /// Sort key for "most recent first". ISO-8601 timestamps sort correctly as
+    /// strings, so no date parsing is needed just to order a list.
+    pub fn sort_key(&self) -> &str {
+        self.requested_at
+            .as_deref()
+            .or(self.enqueued_at.as_deref())
+            .unwrap_or("")
+    }
 }
 
-/// Flatten slskd's user → directory → file nesting into a plain list.
+/// Flatten slskd's user → directory → file nesting into a plain list, most
+/// recently requested first.
+///
+/// slskd groups transfers by peer, so the raw order tracks whichever peer
+/// happens to be listed first rather than anything the user did. Newest-first
+/// puts what you just queued where you are already looking.
 pub fn flatten(users: &[TransferUser]) -> Vec<Transfer> {
-    users
+    let mut out: Vec<Transfer> = users
         .iter()
         .flat_map(|u| u.directories.iter())
         .flat_map(|d| d.files.iter())
         .cloned()
-        .collect()
+        .collect();
+    out.sort_by(|a, b| b.sort_key().cmp(a.sort_key()));
+    out
 }
 
 // ------------------------------------------------------------------ browse
@@ -244,4 +263,59 @@ pub struct UserInfo {
 pub struct UserStatus {
     pub presence: String,
     pub is_privileged: bool,
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+
+    fn t(name: &str, requested: &str) -> Transfer {
+        Transfer {
+            filename: format!("@@p\\Music\\{name}"),
+            requested_at: Some(requested.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn flatten_puts_the_newest_request_first() {
+        // slskd groups by peer, so raw order follows whichever peer is listed
+        // first. What you just queued must appear at the top.
+        let users = vec![
+            TransferUser {
+                username: "old_peer".into(),
+                directories: vec![TransferDirectory {
+                    directory: "d".into(),
+                    files: vec![t("first.mp3", "2026-08-24T05:00:00")],
+                }],
+            },
+            TransferUser {
+                username: "new_peer".into(),
+                directories: vec![TransferDirectory {
+                    directory: "d".into(),
+                    files: vec![t("latest.mp3", "2026-08-24T09:30:00")],
+                }],
+            },
+        ];
+        let out = flatten(&users);
+        assert_eq!(out[0].name(), "latest.mp3");
+        assert_eq!(out[1].name(), "first.mp3");
+    }
+
+    #[test]
+    fn transfers_without_timestamps_do_not_panic_the_sort() {
+        let users = vec![TransferUser {
+            username: "p".into(),
+            directories: vec![TransferDirectory {
+                directory: "d".into(),
+                files: vec![
+                    Transfer { filename: "a.mp3".into(), ..Default::default() },
+                    t("b.mp3", "2026-08-24T05:00:00"),
+                ],
+            }],
+        }];
+        let out = flatten(&users);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].name(), "b.mp3", "timestamped entries sort ahead of unknown");
+    }
 }

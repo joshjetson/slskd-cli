@@ -111,6 +111,31 @@ fn spinner_frame(elapsed: std::time::Duration) -> &'static str {
     SPINNER[(elapsed.as_millis() / 120) as usize % SPINNER.len()]
 }
 
+/// One-glance state of a search result: has it been queued, how far along is
+/// it, is it already on disk. Without this the only way to tell whether `d`
+/// did anything was to leave the tab.
+fn result_status(app: &App, c: &crate::models::Candidate) -> (String, Style) {
+    if let Some(t) = app.transfer_for(c) {
+        return if t.succeeded() {
+            ("done".into(), Style::default().fg(Color::Green))
+        } else if t.errored() {
+            ("failed".into(), Style::default().fg(Color::Red))
+        } else if t.state == "InProgress" {
+            (
+                format!("{:.0}%", t.percent_complete),
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            )
+        } else {
+            ("queued".into(), Style::default().fg(Color::Yellow))
+        };
+    }
+    if app.already_have(c) {
+        // Same filename already came down from a different peer.
+        return ("have".into(), Style::default().fg(Color::Green).add_modifier(Modifier::DIM));
+    }
+    (String::new(), Style::default())
+}
+
 fn search_tab(f: &mut Frame, area: Rect, app: &mut App) {
     if app.results.is_empty() {
         let msg = match app.search_elapsed() {
@@ -140,7 +165,9 @@ fn search_tab(f: &mut Frame, area: Rect, app: &mut App) {
             } else {
                 Style::default().fg(Color::Red)
             };
+            let (st, st_style) = result_status(app, c);
             Row::new(vec![
+                Cell::from(st).style(st_style),
                 Cell::from(fmt::truncate(&c.username, 16)),
                 Cell::from(slot).style(slot_style),
                 Cell::from(c.queue_length.to_string()),
@@ -160,6 +187,7 @@ fn search_tab(f: &mut Frame, area: Rect, app: &mut App) {
     let table = Table::new(
         rows,
         [
+            Constraint::Length(6),
             Constraint::Length(16),
             Constraint::Length(4),
             Constraint::Length(5),
@@ -172,7 +200,7 @@ fn search_tab(f: &mut Frame, area: Rect, app: &mut App) {
         ],
     )
     .header(
-        Row::new(vec!["user", "slot", "queue", "speed", "rate", "len", "size", "file", "folder"])
+        Row::new(vec!["dl", "user", "slot", "queue", "speed", "rate", "len", "size", "file", "folder"])
             .style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
     )
     .row_highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
@@ -245,7 +273,10 @@ fn transfers_tab(f: &mut Frame, area: Rect, app: &mut App) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" transfers ({}) — c to clear completed ", app.transfers.len())),
+            .title(format!(
+                " transfers ({}) — newest first · c clear finished · x remove selected ",
+                app.transfers.len()
+            )),
     );
 
     f.render_stateful_widget(table, split[0], &mut state);
@@ -299,7 +330,7 @@ fn browse_tab(f: &mut Frame, area: Rect, app: &mut App) {
         )
         .row_highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
         .block(Block::default().borders(Borders::ALL).title(format!(
-            " {} — {} directories ",
+            " {} — {} directories · c clear ",
             app.browse_user,
             app.browse_dirs.len()
         )));
@@ -308,7 +339,15 @@ fn browse_tab(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn status_bar(f: &mut Frame, area: Rect, app: &App) {
-    let keys = " q quit · / search · esc cancel · jk move · d queue · b browse · a format · v variants";
+    // Per-tab, because a single global list either omits half the keys or is
+    // too long to read. Dropping `c clear` from a shared list is exactly how it
+    // became invisible.
+    let keys = match app.tab {
+        Tab::Search if app.searching() => " esc cancel · q quit",
+        Tab::Search => " / search · d queue · b browse peer · a format · v variants · q quit",
+        Tab::Transfers => " c clear finished · x remove · b browse peer · r refresh · q quit",
+        Tab::Browse => " c clear list · jk move · r refresh · q quit",
+    };
     let line = Line::from(vec![
         Span::styled(
             fmt::truncate(&app.status, area.width.saturating_sub(2) as usize),
@@ -381,6 +420,7 @@ mod tests {
             filename: "@@peer\\Music\\Aja\\Peg.mp3".into(),
             state: "InProgress".into(), size: 8_000_000, bytes_transferred: 4_000_000,
             percent_complete: 50.0, average_speed: 1_048_576.0, exception: None,
+            requested_at: Some("2026-08-24T05:10:40".into()), enqueued_at: None,
         }];
         a.browse_user = "peer_three".into();
         a.browse_dirs = vec![BrowseDirectory { name: "Classic Rock".into(), file_count: 57, files: vec![] }];
@@ -405,6 +445,60 @@ mod tests {
         assert!(out.contains("Toto IV"), "folder column missing:\n{out}");
     }
 
+    fn xfer(user: &str, path: &str, state: &str, pct: f64) -> Transfer {
+        Transfer {
+            id: "1".into(),
+            username: user.into(),
+            filename: path.into(),
+            state: state.into(),
+            size: 8_000_000,
+            bytes_transferred: 4_000_000,
+            percent_complete: pct,
+            average_speed: 1_048_576.0,
+            exception: None,
+            requested_at: Some("2026-08-24T05:10:40".into()),
+            enqueued_at: None,
+        }
+    }
+
+    #[test]
+    fn search_rows_show_download_state_without_leaving_the_tab() {
+        let mut a = app();
+        let c = candidate("01 Africa.mp3", "peer_one");
+        let path = c.file.filename.clone();
+        a.results = vec![c];
+
+        // nothing queued yet -> no marker
+        assert!(!render(&mut a, 130, 12).contains("queued"));
+
+        a.transfers = vec![xfer("peer_one", &path, "InProgress", 42.0)];
+        a.reindex_for_test();
+        assert!(render(&mut a, 130, 12).contains("42%"), "in-flight percent must show on the search tab");
+
+        a.transfers = vec![xfer("peer_one", &path, "Completed, Succeeded", 100.0)];
+        a.reindex_for_test();
+        assert!(render(&mut a, 130, 12).contains("done"));
+
+        a.transfers = vec![xfer("peer_one", &path, "Completed, Errored", 0.0)];
+        a.reindex_for_test();
+        assert!(render(&mut a, 130, 12).contains("failed"));
+    }
+
+    #[test]
+    fn a_file_already_fetched_from_another_peer_is_marked_have() {
+        // Guards against queueing the same song twice from different peers.
+        let mut a = app();
+        a.results = vec![candidate("01 Africa.mp3", "peer_two")];
+        a.transfers = vec![xfer(
+            "someone_else",
+            "@@other\\Music\\Elsewhere\\01 Africa.mp3",
+            "Completed, Succeeded",
+            100.0,
+        )];
+        a.reindex_for_test();
+        assert!(render(&mut a, 130, 12).contains("have"));
+    }
+
     #[test]
     fn renders_transfers_with_a_progress_gauge() {
         let mut a = app();
@@ -419,6 +513,8 @@ mod tests {
             percent_complete: 50.0,
             average_speed: 1_048_576.0,
             exception: None,
+            requested_at: Some("2026-08-24T05:10:40".into()),
+            enqueued_at: None,
         }];
         let out = render(&mut a, 100, 24);
         assert!(out.contains("peer_two"));

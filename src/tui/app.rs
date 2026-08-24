@@ -5,6 +5,7 @@ use crate::{
     models::{flatten as flatten_transfers, Application, BrowseDirectory, Candidate, Search, Transfer, TransferUser},
     rank::{self, Filter},
 };
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
@@ -34,6 +35,12 @@ pub struct App {
 
     pub transfers: Vec<Transfer>,
     pub transfer_selected: usize,
+    /// Transfer state keyed by (peer, exact remote path), so a search result
+    /// can show what happened to that precise file.
+    transfer_by_file: HashMap<(String, String), Transfer>,
+    /// Basenames that completed successfully from *any* peer. Lets a result be
+    /// marked as already-held even when it was fetched from someone else.
+    have_basenames: HashSet<String>,
 
     pub browse_user: String,
     pub browse_dirs: Vec<BrowseDirectory>,
@@ -64,6 +71,8 @@ impl App {
             allow_variants: false,
             transfers: Vec::new(),
             transfer_selected: 0,
+            transfer_by_file: HashMap::new(),
+            have_basenames: HashSet::new(),
             browse_user: String::new(),
             browse_dirs: Vec::new(),
             browse_selected: 0,
@@ -237,6 +246,7 @@ impl App {
             match handle.await {
                 Ok(Ok(users)) => {
                     self.transfers = flatten_transfers(&users);
+                    self.reindex_transfers();
                     if self.transfer_selected >= self.transfers.len() {
                         self.transfer_selected = self.transfers.len().saturating_sub(1);
                     }
@@ -245,6 +255,38 @@ impl App {
                 Err(_) => {}
             }
         }
+    }
+
+    #[cfg(test)]
+    pub fn reindex_for_test(&mut self) {
+        self.reindex_transfers();
+    }
+
+    fn reindex_transfers(&mut self) {
+        self.transfer_by_file = self
+            .transfers
+            .iter()
+            .map(|t| ((t.username.clone(), t.filename.clone()), t.clone()))
+            .collect();
+        self.have_basenames = self
+            .transfers
+            .iter()
+            .filter(|t| t.succeeded())
+            .map(|t| crate::models::basename(&t.filename).to_lowercase())
+            .collect();
+    }
+
+    /// What, if anything, has happened to this exact file from this exact peer.
+    pub fn transfer_for(&self, c: &Candidate) -> Option<&Transfer> {
+        self.transfer_by_file
+            .get(&(c.username.clone(), c.file.filename.clone()))
+    }
+
+    /// Whether a file by this name already came down from somebody. Guards
+    /// against queueing the same song twice from different peers.
+    pub fn already_have(&self, c: &Candidate) -> bool {
+        self.have_basenames
+            .contains(&c.name().to_lowercase())
     }
 
     pub async fn activate(&mut self) {
@@ -266,6 +308,19 @@ impl App {
         {
             Ok(()) => {
                 self.status = format!("queued {} from {}", c.name(), c.username);
+                // Show it as queued straight away. The next poll replaces this
+                // with slskd's own view a second or two later, but the row must
+                // react to the keypress now, not eventually.
+                self.transfer_by_file.insert(
+                    (c.username.clone(), c.file.filename.clone()),
+                    Transfer {
+                        username: c.username.clone(),
+                        filename: c.file.filename.clone(),
+                        state: "Queued, Locally".into(),
+                        size: c.file.size,
+                        ..Default::default()
+                    },
+                );
                 self.refresh_transfers();
             }
             Err(e) => self.status = format!("queue failed: {e}"),
@@ -297,12 +352,34 @@ impl App {
     }
 
     pub async fn clear_completed(&mut self) {
+        let finished = self.transfers.iter().filter(|t| t.is_done()).count();
         match self.api.clear_completed().await {
             Ok(()) => {
-                self.status = "cleared completed transfers".into();
+                self.status = format!("cleared {finished} finished transfers (done and failed)");
                 self.refresh_transfers();
             }
             Err(e) => self.status = format!("clear failed: {e}"),
         }
+    }
+
+    /// Drop the currently selected transfer, finished or not.
+    pub async fn remove_selected_transfer(&mut self) {
+        let Some(t) = self.transfers.get(self.transfer_selected).cloned() else {
+            return;
+        };
+        match self.api.remove_download(&t.username, &t.id).await {
+            Ok(()) => {
+                self.status = format!("removed {}", t.name());
+                self.refresh_transfers();
+            }
+            Err(e) => self.status = format!("remove failed: {e}"),
+        }
+    }
+
+    pub fn clear_browse(&mut self) {
+        self.browse_dirs.clear();
+        self.browse_user.clear();
+        self.browse_selected = 0;
+        self.status = "cleared browse listing".into();
     }
 }

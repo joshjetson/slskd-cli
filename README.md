@@ -160,6 +160,26 @@ Useful flags on `search` and `get`:
 | `--allow-variants` | Keep remixes, covers, karaoke and live cuts |
 | `--count N` | Queue the top N sources instead of one |
 
+### Seeing what you already have
+
+The search tab carries a `dl` column so you never have to leave it to find out what a
+keypress did:
+
+| Shows | Meaning |
+| --- | --- |
+| *(blank)* | not queued |
+| `queued` | accepted by slskd, waiting on the peer |
+| `42%` | downloading now |
+| `done` | finished |
+| `failed` | the peer dropped it |
+| `have` | a file of that name already came down **from someone else** |
+
+`have` is the one that saves you time — it stops you queueing the same song again from a
+different peer just because the first attempt scrolled out of view.
+
+Transfers are listed newest first, ordered by when you requested them, because slskd
+returns them grouped by peer, which tracks nothing you did.
+
 ### TUI keys
 
 | Key | Action |
@@ -168,8 +188,9 @@ Useful flags on `search` and `get`:
 | `1` `2` `3`, `Tab` | Switch between search, transfers, browse |
 | `j` `k`, arrows | Move; `g` / `G` for top and bottom |
 | `d` | Queue the selected file |
+| `x` | Remove the selected transfer (transfers tab) |
 | `b` | Browse the selected peer's shares |
-| `c` | Clear completed transfers |
+| `c` | Clear finished transfers, or clear the browse listing |
 | `a` | Toggle mp3-only vs any format |
 | `v` | Toggle whether remixes and covers are allowed |
 | `r` | Refresh |

@@ -76,6 +76,34 @@ Endpoints are probed concurrently and the first healthy one wins, with ties brok
 order — so a LAN address and a public hostname for the same server can both be listed and
 the fast one is used automatically when you're home.
 
+## Switching networks
+
+Auto-detection handles this on its own: off the LAN, the local address fails its health
+check and the public one is used. Nothing to edit.
+
+The catch is that probing costs whatever the unreachable endpoint takes to time out. When
+you already know where you are, name the endpoint and skip probing entirely:
+
+```sh
+slsk status                              # probe both      ~1.8s off-network
+SLSKD_ENDPOINT=remote slsk status        # no probe        ~0.2s
+```
+
+Export it in a shell profile to pin a machine to one path, or set it per-command when
+travelling. Nothing in the config file needs to change.
+
+## Environment
+
+| Variable | Effect |
+| --- | --- |
+| `SLSKD_URL` | Use this endpoint, ignoring the config's endpoint list entirely |
+| `SLSKD_ENDPOINT` | Use the configured endpoint with this `name` (e.g. `lan`, `remote`) |
+| `SLSKD_API_KEY` | API key, overriding both `api_key` and `api_key_file` |
+
+Endpoint selection resolves most-explicit-first: `--url`, then `SLSKD_URL`, then
+`--endpoint`, then `SLSKD_ENDPOINT`, then probing. An unknown name is an error that lists
+what is configured, rather than a silent fallback.
+
 ### API key
 
 Add a key to `slskd.yml` under `web.authentication`:
@@ -99,6 +127,7 @@ printf '%s' 'your-key-here' > ~/.config/slskd-cli/.apikey
 ```
 
 `SLSKD_API_KEY` in the environment overrides the file if you'd rather not keep it on disk.
+See [Environment](#environment) for the other variables.
 
 ## Usage
 
@@ -112,6 +141,9 @@ slsk get "toto rosanna" --yes         # skip the prompt
 slsk transfers --watch                # follow progress to completion
 slsk transfers --clear                # drop completed and errored records
 slsk browse someuser --filter jazz    # explore a peer's shares
+
+slsk --endpoint remote status         # force a configured endpoint
+slsk --url http://host:5030 status    # bypass config entirely
 ```
 
 Useful flags on `search` and `get`:

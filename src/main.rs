@@ -35,13 +35,13 @@ async fn main() -> Result<()> {
 
     let cfg = Config::load()?;
     let key = cfg.key()?;
-    let base = match &args.url {
-        Some(u) => u.clone(),
-        None => cfg.resolve(&http).await?.url,
-    };
+    let chosen = cfg
+        .select(&http, args.url.as_deref(), args.endpoint.as_deref())
+        .await?;
     if args.verbose {
-        eprintln!("endpoint: {base}");
+        eprintln!("endpoint: {} ({})", chosen.url, chosen.name);
     }
+    let base = chosen.url;
     let api = Client::new(http, base, key);
 
     match args.command {

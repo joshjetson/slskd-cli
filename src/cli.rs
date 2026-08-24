@@ -12,8 +12,14 @@ use clap::{Args, Parser, Subcommand};
 )]
 pub struct Cli {
     /// Override the endpoint instead of auto-detecting from config.
+    /// Also settable as SLSKD_URL.
     #[arg(long, global = true, value_name = "URL")]
     pub url: Option<String>,
+
+    /// Use a named endpoint from config instead of auto-detecting.
+    /// Also settable as SLSKD_ENDPOINT.
+    #[arg(long, global = true, value_name = "NAME")]
+    pub endpoint: Option<String>,
 
     /// Print the resolved endpoint before running.
     #[arg(long, global = true)]

@@ -101,6 +101,12 @@ pub struct GetArgs {
     /// Queue the top N sources instead of just the best one.
     #[arg(long, default_value_t = 1)]
     pub count: usize,
+
+    /// How many distinct peers to try before giving up. Peers reject enqueues
+    /// for their own reasons (byte limits, full queues, going offline), so the
+    /// next source down is usually fine.
+    #[arg(long, default_value_t = 5)]
+    pub tries: usize,
 }
 
 #[derive(Args, Debug)]

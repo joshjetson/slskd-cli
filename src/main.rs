@@ -142,14 +142,14 @@ async fn get(api: &Client, a: &GetArgs) -> Result<()> {
     if cands.is_empty() {
         anyhow::bail!("nothing matched — try --any-format or --no-duration-check");
     }
-    let take = a.count.max(1).min(cands.len());
-    let chosen = &cands[..take];
+    let want = a.count.max(1);
+    let preview = want.min(cands.len());
 
     println!("picked:");
-    print_candidates(chosen, take);
+    print_candidates(&cands[..preview], preview);
 
     if !a.yes {
-        print!("\nqueue {} file(s)? [y/N] ", take);
+        print!("\nqueue {} file(s)? [y/N] ", preview);
         std::io::stdout().flush()?;
         let mut line = String::new();
         std::io::stdin().read_line(&mut line)?;
@@ -159,13 +159,64 @@ async fn get(api: &Client, a: &GetArgs) -> Result<()> {
         }
     }
 
-    for c in chosen {
+    // Walk down the ranked list rather than queueing the top N blindly.
+    //
+    // An enqueue is rejected surprisingly often for reasons that have nothing
+    // to do with the file: the peer's own byte or file limits ("Transfer
+    // rejected: Too many megabytes"), a full queue, or the peer having gone
+    // offline since the search. Retrying the same peer cannot help, and the
+    // next source down is usually fine — so on rejection, move on.
+    let mut queued = 0usize;
+    let mut tried_users: Vec<&str> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    for c in cands.iter() {
+        if queued >= want || tried_users.len() >= a.tries {
+            break;
+        }
+        // One shot per peer; a peer that refuses one file refuses the next too.
+        if tried_users.contains(&c.username.as_str()) {
+            continue;
+        }
+        tried_users.push(&c.username);
+
         match api.enqueue(&c.username, std::slice::from_ref(&c.file)).await {
-            Ok(()) => println!("queued  {}  from {}", c.name(), c.username),
-            Err(e) => eprintln!("failed  {}  from {}: {e}", c.name(), c.username),
+            Ok(()) => {
+                println!("queued  {}  from {}", c.name(), c.username);
+                queued += 1;
+            }
+            Err(e) => {
+                let reason = peer_rejection(&e).unwrap_or_else(|| e.to_string());
+                println!("skipped {} — {}", c.username, fmt::truncate(&reason, 68));
+                errors.push(reason);
+            }
         }
     }
+
+    if queued == 0 {
+        anyhow::bail!(
+            "every source refused ({} tried).{}",
+            tried_users.len(),
+            errors
+                .last()
+                .map(|e| format!(" last reason: {e}"))
+                .unwrap_or_default()
+        );
+    }
     Ok(())
+}
+
+/// Pull the peer's own words out of a slskd enqueue failure.
+///
+/// slskd wraps them as a 500 with an aggregate exception, so the useful part —
+/// "Too many megabytes", "Too many files", "User is offline" — is buried in the
+/// middle of a URL and a JSON blob.
+fn peer_rejection(e: &anyhow::Error) -> Option<String> {
+    let s = e.to_string();
+    let start = s.find("Transfer rejected:")?;
+    let rest = &s[start..];
+    let end = rest.find(')').unwrap_or(rest.len());
+    Some(rest[..end].trim_end_matches(&['"', '.'][..]).to_string())
 }
 
 async fn transfers(api: &Client, a: &TransferArgs) -> Result<()> {

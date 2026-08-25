@@ -159,6 +159,7 @@ Useful flags on `search` and `get`:
 | `--no-duration-check` | Keep results with implausible runtimes |
 | `--allow-variants` | Keep remixes, covers, karaoke and live cuts |
 | `--count N` | Queue the top N sources instead of one |
+| `--tries N` | Distinct peers to try before giving up (default 5) |
 
 ### Seeing what you already have
 
@@ -229,6 +230,10 @@ Prefer `--artist` over folding the artist into the query. `slsk search "kenny lo
 is it"` treats every word as part of the title, which makes a weak title look strong and
 lets `with_this_ring.mp3` through. `slsk search "this is it" --artist "kenny loggins"`
 narrowed the same 4062 files to the 2 correct ones.
+
+If a peer refuses the transfer — `Transfer rejected: Too many megabytes`, a full queue,
+or having gone offline since the search — `get` moves to the next source rather than
+failing. Retrying the same peer cannot help; the next one down usually works.
 
 Locked files are dropped, never queued. Use `--no-duration-check` for mixes and medleys,
 `--allow-variants` when you actually want the remix.

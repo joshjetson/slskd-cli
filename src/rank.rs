@@ -92,8 +92,17 @@ fn title_field(basename: &str) -> String {
 /// Titles made almost entirely of short words survive tokenisation as one or
 /// two weak tokens — "This Is It" becomes just `this`, which matches "This Is
 /// How My Song Goes". When a title is that weak, require the whole phrase.
+///
+/// Strength is measured over *distinct* tokens. A repeated word carries no
+/// extra matching power: "More More More" tokenises to three copies of `more`,
+/// and requiring every one of them is satisfied by a single occurrence. Counted
+/// naively it looked like a strong three-token title and skipped the phrase
+/// check, which is how a search for it returned "More Than You'll Ever Know".
 fn is_weak(title_tokens: &[String]) -> bool {
-    title_tokens.len() < 2 || title_tokens.iter().map(|t| t.len()).sum::<usize>() < 8
+    let mut distinct: Vec<&String> = title_tokens.iter().collect();
+    distinct.sort();
+    distinct.dedup();
+    distinct.len() < 2 || distinct.iter().map(|t| t.len()).sum::<usize>() < 8
 }
 
 pub fn normalize_phrase(s: &str) -> String {
@@ -460,6 +469,29 @@ mod tests {
         assert_eq!(title_field("A - B - 07 - Real Title.mp3"), "real title");
         // underscore-separated names are common from some clients
         assert_eq!(title_field("02_-_Hall_&_Oates_-_Rich_Girl.mp3"), "rich girl");
+    }
+
+    #[test]
+    fn a_repeated_word_does_not_count_as_a_strong_title() {
+        // Real miss: "More More More" looked like three tokens, skipped the
+        // phrase check, and matched "More Than You'll Ever Know".
+        let mut wrong = file("x.mp3", Some(320), Some(230));
+        wrong.filename =
+            "@@peer\\Music\\Greatest Hits\\14 - Milli Vanilli - More Than You'll Ever Know.mp3"
+                .to_string();
+        let mut right = file("y.mp3", Some(320), Some(215));
+        right.filename =
+            "@@peer\\Music\\Disco\\Andrea True Connection - More More More.mp3".to_string();
+
+        let f = Filter {
+            title_tokens: tokenize("More More More"),
+            title_phrase: Some(normalize_phrase("More More More")),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        let ranked = rank(&[resp("peer", true, 0, 100, vec![wrong, right])], &f);
+        assert_eq!(ranked.len(), 1, "only the real track should survive");
+        assert!(ranked[0].file.filename.contains("More More More"));
     }
 
     #[test]

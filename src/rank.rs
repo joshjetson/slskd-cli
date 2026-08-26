@@ -149,6 +149,25 @@ pub fn normalize_phrase(s: &str) -> String {
     out
 }
 
+/// Whether a path plausibly names this artist.
+///
+/// A plain substring test is too eager for short names: searching Gal Costa
+/// matched a Japanese single because "gal" appears inside "SINGALONG". A plain
+/// token test is too strict the other way, because peers write names solid —
+/// "BadenPowell" is one token and would never equal "baden".
+///
+/// So: short tokens must be a whole token in the path, longer ones may appear
+/// inside one. Four characters is where accidental collisions stop being
+/// common in practice.
+fn path_mentions(path: &str, artist_token: &str) -> bool {
+    let tokens = tokenize(path);
+    if artist_token.len() >= 4 {
+        tokens.iter().any(|p| p.contains(artist_token))
+    } else {
+        tokens.iter().any(|p| p == artist_token)
+    }
+}
+
 const AUDIO: &[&str] = &["mp3", "flac", "m4a", "ogg", "oga", "opus", "wav", "wma"];
 
 
@@ -163,7 +182,7 @@ const AUDIO: &[&str] = &["mp3", "flac", "m4a", "ogg", "oga", "opus", "wav", "wma
 /// for "steely dan peg live" and live versions stay in the running.
 const VARIANT_TOKENS: &[&str] = &[
     "remix", "rmx", "mix", "karaoke", "tribute", "cover", "instrumental",
-    "acapella", "acoustic", "reprise", "demo", "rehearsal", "megamix",
+    "acapella", "acoustic", "reprise", "demo", "rehearsal", "megamix", "edit",
 ];
 
 /// Variant tokens judged against the *whole path* rather than the filename.
@@ -200,8 +219,7 @@ impl Filter {
         }
 
         if !self.artist_tokens.is_empty() {
-            let full = c.file.filename.to_lowercase();
-            if !self.artist_tokens.iter().any(|t| full.contains(t.as_str())) {
+            if !self.artist_tokens.iter().any(|t| path_mentions(&c.file.filename, t)) {
                 return false;
             }
         }
@@ -564,6 +582,52 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(rank(&[resp("peer", true, 0, 100, vec![g])], &f).len(), 1);
+    }
+
+    #[test]
+    fn a_short_artist_token_must_be_a_whole_word() {
+        // Real miss: searching Gal Costa's "Baby" queued a Japanese single,
+        // because "gal" sits inside "SINGALONG".
+        let mut wrong = file("06. Shout Baby.mp3", Some(320), Some(240));
+        wrong.filename =
+            "@@peer\\Music\\SINGALONG (2020) [WEB 320]\\06. Shout Baby.mp3".to_string();
+        let f = Filter {
+            title_tokens: tokenize("Baby"),
+            title_phrase: Some(normalize_phrase("Baby")),
+            artist_tokens: tokenize("Gal Costa"),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert!(rank(&[resp("peer", true, 0, 100, vec![wrong])], &f).is_empty());
+    }
+
+    #[test]
+    fn a_longer_artist_token_still_matches_a_run_together_name() {
+        // Peers write names solid: "BadenPowell" is a single token.
+        let mut g = file("x.mp3", Some(320), Some(200));
+        g.filename =
+            "@@peer\\VA - Guitar Workshop\\6_BadenPowell_Berimbau.mp3".to_string();
+        let f = Filter {
+            title_tokens: tokenize("Berimbau"),
+            title_phrase: Some(normalize_phrase("Berimbau")),
+            artist_tokens: tokenize("Baden Powell"),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert_eq!(rank(&[resp("peer", true, 0, 100, vec![g])], &f).len(), 1);
+    }
+
+    #[test]
+    fn an_edit_is_rejected_like_any_other_variant() {
+        let g = file("Quarteto Em Cy - Tudo Que Voce Podia Ser (Querelas Do Brazil Edit).mp3",
+                     Some(320), Some(250));
+        let f = Filter {
+            title_tokens: tokenize("Tudo Que Voce Podia Ser"),
+            title_phrase: Some(normalize_phrase("Tudo Que Voce Podia Ser")),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert!(rank(&[resp("peer", true, 0, 100, vec![g])], &f).is_empty());
     }
 
     #[test]

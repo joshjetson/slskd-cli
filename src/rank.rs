@@ -57,13 +57,40 @@ impl Default for Filter {
     }
 }
 
+/// Fold a Latin letter with a diacritic down to its ASCII base.
+///
+/// Tokenising splits on anything non-ASCII-alphanumeric, so without this
+/// "Águas" becomes the token `guas` and can never match a search for "Aguas" —
+/// which is most of a Brazilian, French or Spanish library. Peers are
+/// inconsistent about accents in filenames, so both sides get folded and the
+/// comparison stops caring.
+fn fold_char(c: char) -> char {
+    match c {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => 'a',
+        'è' | 'é' | 'ê' | 'ë' => 'e',
+        'ì' | 'í' | 'î' | 'ï' => 'i',
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' => 'o',
+        'ù' | 'ú' | 'û' | 'ü' => 'u',
+        'ç' => 'c',
+        'ñ' => 'n',
+        'ý' | 'ÿ' => 'y',
+        'š' => 's',
+        'ž' => 'z',
+        other => other,
+    }
+}
+
+fn fold(s: &str) -> String {
+    s.to_lowercase().chars().map(fold_char).collect()
+}
+
 /// Split a phrase into matchable tokens, dropping punctuation and noise words.
 ///
 /// One-and-two-character tokens are dropped: they are mostly `a`, `of`, and the
 /// wreckage of apostrophes (`don't` → `don`, `t`), and requiring them to appear
 /// rejects correctly-named files over trivial punctuation differences.
 pub fn tokenize(s: &str) -> Vec<String> {
-    s.to_lowercase()
+    fold(s)
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|t| t.len() > 2)
         .map(|t| t.to_string())
@@ -84,8 +111,8 @@ fn title_field(basename: &str) -> String {
     let norm = basename.replace('_', " ");
     let stem = norm.rsplit_once('.').map(|(s, _)| s).unwrap_or(&norm).to_string();
     match stem.rsplit(" - ").next() {
-        Some(last) if !last.trim().is_empty() => last.trim().to_lowercase(),
-        _ => stem.to_lowercase(),
+        Some(last) if !last.trim().is_empty() => fold(last.trim()),
+        _ => fold(&stem),
     }
 }
 
@@ -108,7 +135,7 @@ fn is_weak(title_tokens: &[String]) -> bool {
 pub fn normalize_phrase(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut space = false;
-    for c in s.to_lowercase().chars() {
+    for c in fold(s).chars() {
         if c.is_ascii_alphanumeric() {
             if space && !out.is_empty() {
                 out.push(' ');
@@ -505,6 +532,37 @@ mod tests {
             ..Default::default()
         };
         let g = file("086. Neil Sedaka - Laughter In The Rain.mp3", Some(320), Some(170));
+        assert_eq!(rank(&[resp("peer", true, 0, 100, vec![g])], &f).len(), 1);
+    }
+
+    #[test]
+    fn accents_fold_so_unaccented_queries_still_match() {
+        // Peers spell Brazilian titles both ways. Without folding, "Águas"
+        // tokenises to ["guas"] and a search for "Aguas de Marco" finds nothing.
+        assert_eq!(tokenize("Águas de Março"), ["aguas", "marco"]);
+        assert_eq!(tokenize("Começar de Novo"), ["comecar", "novo"]);
+        assert_eq!(normalize_phrase("Manhã de Carnaval"), "manha de carnaval");
+
+        let g = file("01 - Elis Regina - Águas de Março.mp3", Some(320), Some(215));
+        let f = Filter {
+            title_tokens: tokenize("Aguas de Marco"),
+            title_phrase: Some(normalize_phrase("Aguas de Marco")),
+            artist_tokens: tokenize("Elis Regina"),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert_eq!(rank(&[resp("peer", true, 0, 100, vec![g])], &f).len(), 1);
+    }
+
+    #[test]
+    fn accented_query_matches_an_unaccented_file() {
+        let g = file("Marcos Valle - Nao Tem Nada Nao.mp3", Some(320), Some(200));
+        let f = Filter {
+            title_tokens: tokenize("Não Tem Nada Não"),
+            title_phrase: Some(normalize_phrase("Não Tem Nada Não")),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
         assert_eq!(rank(&[resp("peer", true, 0, 100, vec![g])], &f).len(), 1);
     }
 

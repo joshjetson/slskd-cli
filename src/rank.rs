@@ -160,7 +160,11 @@ pub fn normalize_phrase(s: &str) -> String {
 /// inside one. Four characters is where accidental collisions stop being
 /// common in practice.
 fn path_mentions(path: &str, artist_token: &str) -> bool {
-    let tokens = tokenize(path);
+    // Must tokenize the path the same way the artist name was tokenized.
+    // Using the stricter `tokenize` here dropped two-character tokens from the
+    // path, so the "42" kept in "Level 42" could never be found and the band
+    // became unmatchable.
+    let tokens = tokenize_artist(path);
     if artist_token.len() >= 4 {
         tokens.iter().any(|p| p.contains(artist_token))
     } else {
@@ -209,6 +213,8 @@ const VARIANT_TOKENS: &[&str] = &[
     "acapella", "acoustic", "reprise", "demo", "rehearsal", "megamix", "edit",
     // Re-cut / re-production markers used by the edit scene.
     "revibe", "rework", "redux", "reedit", "refix", "rerub", "dub",
+    // DJ-pool markers. These files are cut for mixing, not listening.
+    "intro", "clean", "dirty", "acap", "quickie", "transition",
 ];
 
 /// Variant tokens judged against the *whole path* rather than the filename.
@@ -721,6 +727,36 @@ mod tests {
         let f = Filter {
             title_tokens: tokenize("A Night To Remember"),
             title_phrase: Some(normalize_phrase("A Night To Remember")),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert!(rank(&[resp("p", true, 0, 100, vec![g])], &f).is_empty());
+    }
+
+    #[test]
+    fn a_kept_number_can_actually_be_found_in_the_path() {
+        // The query keeps "42"; the path tokenizer has to keep it too.
+        let mut g = file("x.mp3", Some(320), Some(221));
+        g.filename = "@@p\\Turn It On\\Level 42_Turn It On_08_Turn It On.mp3".to_string();
+        let f = Filter {
+            title_tokens: tokenize("Turn It On"),
+            title_phrase: Some(normalize_phrase("Turn It On")),
+            artist_tokens: tokenize_artist("Level 42"),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert_eq!(rank(&[resp("p", true, 0, 100, vec![g])], &f).len(), 1);
+    }
+
+    #[test]
+    fn a_dj_pool_intro_cut_is_rejected() {
+        // "(Sickmix Intro) (Clean)" is cut for mixing. "sickmix" is not the
+        // token "mix", so the marker that catches it is "intro".
+        let g = file("Turn It On Level 42 (Sickmix Intro) (Clean) 115.mp3", Some(320), Some(300));
+        let f = Filter {
+            title_tokens: tokenize("Turn It On"),
+            title_phrase: Some(normalize_phrase("Turn It On")),
+            artist_tokens: tokenize_artist("Level 42"),
             extensions: vec!["mp3".into()],
             ..Default::default()
         };

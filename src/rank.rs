@@ -168,6 +168,30 @@ fn path_mentions(path: &str, artist_token: &str) -> bool {
     }
 }
 
+/// Words that appear in artist names but identify nobody.
+///
+/// "Kool and the Gang" matched a Jimi Hendrix track because the album folder
+/// contained the word "the". Grammar is not evidence.
+const ARTIST_STOPWORDS: &[&str] = &[
+    "the", "and", "of", "feat", "ft", "with", "his", "her", "band", "los", "las",
+];
+
+/// Tokenize an artist name.
+///
+/// Differs from [`tokenize`] in two ways: short numeric tokens are kept, because
+/// the number in "Level 42" is the only thing separating it from any other band
+/// with "Level" in the name; and stopwords are dropped.
+pub fn tokenize_artist(s: &str) -> Vec<String> {
+    fold(s)
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| {
+            (t.len() > 2 || (t.len() == 2 && t.chars().all(|c| c.is_ascii_digit())))
+                && !ARTIST_STOPWORDS.contains(t)
+        })
+        .map(|t| t.to_string())
+        .collect()
+}
+
 const AUDIO: &[&str] = &["mp3", "flac", "m4a", "ogg", "oga", "opus", "wav", "wma"];
 
 
@@ -219,7 +243,17 @@ impl Filter {
         }
 
         if !self.artist_tokens.is_empty() {
-            if !self.artist_tokens.iter().any(|t| path_mentions(&c.file.filename, t)) {
+            // Require two independent pieces of evidence when the name offers
+            // them. One token is too easy to hit by accident: "Level 42"
+            // reduced to "level" matched a band called Red Level. Names with a
+            // single distinctive token still only need the one.
+            let needed = self.artist_tokens.len().min(2);
+            let found = self
+                .artist_tokens
+                .iter()
+                .filter(|t| path_mentions(&c.file.filename, t))
+                .count();
+            if found < needed {
                 return false;
             }
         }
@@ -236,6 +270,17 @@ impl Filter {
         if self.reject_variants {
             // Never reject on a token the caller explicitly searched for.
             let asked: Vec<&String> = self.title_tokens.iter().collect();
+
+            // Some markers get glued to neighbouring words -- "RemixPack",
+            // "BootlegMix" -- and survive tokenising intact. For the
+            // unambiguous ones, a substring anywhere in the name is enough.
+            const ALWAYS_SUBSTRING: &[&str] = &["remix", "karaoke", "bootleg", "megamix"];
+            let folded_name = fold(c.name());
+            for v in ALWAYS_SUBSTRING {
+                if folded_name.contains(v) && !self.title_tokens.iter().any(|t| t == v) {
+                    return false;
+                }
+            }
 
             let name_tokens = tokenize(c.name());
             for v in VARIANT_TOKENS {
@@ -628,6 +673,70 @@ mod tests {
             ..Default::default()
         };
         assert!(rank(&[resp("peer", true, 0, 100, vec![g])], &f).is_empty());
+    }
+
+    #[test]
+    fn a_number_in_the_band_name_is_kept() {
+        // Real miss: "Level 42" reduced to ["level"] and matched an emo band
+        // called Red Level.
+        assert_eq!(tokenize_artist("Level 42"), ["level", "42"]);
+        let mut wrong = file("10.Turn It On.mp3", Some(320), Some(200));
+        wrong.filename =
+            "@@p\\VA - Emo Diaries No. 1\\Red Level - 10.Turn It On.mp3".to_string();
+        let f = Filter {
+            title_tokens: tokenize("Turn It On"),
+            title_phrase: Some(normalize_phrase("Turn It On")),
+            artist_tokens: tokenize_artist("Level 42"),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert!(rank(&[resp("p", true, 0, 100, vec![wrong])], &f).is_empty());
+    }
+
+    #[test]
+    fn grammar_words_are_not_evidence_of_an_artist() {
+        // Real miss: "Kool and the Gang" matched a Hendrix album folder
+        // containing the word "the".
+        assert_eq!(tokenize_artist("Kool and the Gang"), ["kool", "gang"]);
+        let mut wrong = file("12 - Straight Ahead.mp3", Some(320), Some(280));
+        wrong.filename =
+            "@@p\\First Rays of the New Rising Sun\\12 - Straight Ahead.mp3".to_string();
+        let f = Filter {
+            title_tokens: tokenize("Straight Ahead"),
+            title_phrase: Some(normalize_phrase("Straight Ahead")),
+            artist_tokens: tokenize_artist("Kool and the Gang"),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert!(rank(&[resp("p", true, 0, 100, vec![wrong])], &f).is_empty());
+    }
+
+    #[test]
+    fn a_marker_glued_to_another_word_still_counts() {
+        // "RemixPack" survives tokenising as one token and is not "remix".
+        let g = file("Shalamar - A Night To Remember (Cesar Vilo RemixPack 4).mp3",
+                     Some(320), Some(240));
+        let f = Filter {
+            title_tokens: tokenize("A Night To Remember"),
+            title_phrase: Some(normalize_phrase("A Night To Remember")),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert!(rank(&[resp("p", true, 0, 100, vec![g])], &f).is_empty());
+    }
+
+    #[test]
+    fn one_distinctive_artist_token_is_still_enough() {
+        // Single-word names must not be made impossible by the two-token rule.
+        let g = file("Skyy - Call Me.mp3", Some(320), Some(230));
+        let f = Filter {
+            title_tokens: tokenize("Call Me"),
+            title_phrase: Some(normalize_phrase("Call Me")),
+            artist_tokens: tokenize_artist("Skyy"),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert_eq!(rank(&[resp("p", true, 0, 100, vec![g])], &f).len(), 1);
     }
 
     #[test]

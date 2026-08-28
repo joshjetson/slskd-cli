@@ -162,7 +162,7 @@ impl SearchArgs {
             artist_tokens: self
                 .artist
                 .as_deref()
-                .map(crate::rank::tokenize)
+                .map(crate::rank::tokenize_artist)
                 .unwrap_or_default(),
             extensions,
             min_bitrate: self.min_bitrate,

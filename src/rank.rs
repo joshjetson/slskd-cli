@@ -207,6 +207,8 @@ const AUDIO: &[&str] = &["mp3", "flac", "m4a", "ogg", "oga", "opus", "wav", "wma
 const VARIANT_TOKENS: &[&str] = &[
     "remix", "rmx", "mix", "karaoke", "tribute", "cover", "instrumental",
     "acapella", "acoustic", "reprise", "demo", "rehearsal", "megamix", "edit",
+    // Re-cut / re-production markers used by the edit scene.
+    "revibe", "rework", "redux", "reedit", "refix", "rerub", "dub",
 ];
 
 /// Variant tokens judged against the *whole path* rather than the filename.
@@ -737,6 +739,21 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(rank(&[resp("p", true, 0, 100, vec![g])], &f).len(), 1);
+    }
+
+    #[test]
+    fn an_edit_scene_rework_is_rejected() {
+        // "(Dario Caminita Revibe)" is a re-production, not the 1976 single.
+        let g = file("KC & THE SUNSHINE BAND - I'm Your Boogie Man (Dario Caminita Revibe).mp3",
+                     Some(320), Some(300));
+        let f = Filter {
+            title_tokens: tokenize("Im Your Boogie Man"),
+            title_phrase: Some(normalize_phrase("Im Your Boogie Man")),
+            artist_tokens: tokenize_artist("KC Sunshine"),
+            extensions: vec!["mp3".into()],
+            ..Default::default()
+        };
+        assert!(rank(&[resp("p", true, 0, 100, vec![g])], &f).is_empty());
     }
 
     #[test]
